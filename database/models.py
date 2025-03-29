@@ -10,11 +10,15 @@ from sqlalchemy import (
     func,
     event,
     Table,
+    JSON,
 )
 from sqlalchemy.orm import relationship, declarative_base, sessionmaker
 from .base import Base
 from bkt.engine import BKTEngine
+from bkt.ibkt_engine import IBKTEngine
 import uuid
+import json
+from datetime import datetime
 
 # Section-User association table (many-to-many)
 section_users = Table('section_users', Base.metadata,
@@ -164,42 +168,86 @@ class UserCategory(Base):
     p_lapse = Column(Float, default=0.30)  # Unchanged lapse probability
     consecutive_correct = Column(Integer, default=0)  # Track consecutive correct answers
     
+    # IBKT-specific fields
+    parameter_history = Column(JSON, default=dict)  # Store response history for parameter estimation
+    last_update = Column(DateTime, default=func.now())  # Track when parameters were last updated
+    response_count = Column(Integer, default=0)  # Count of responses for this category
+    use_ibkt = Column(Boolean, default=True)  # Flag to enable/disable IBKT
+    
     # Relationships
     user = relationship("User", back_populates="user_categories")
     category = relationship("Category", back_populates="user_categories")
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self._init_bkt_engine()
+        self._init_engine()
 
-    def _init_bkt_engine(self):
-        """Initialize the BKT engine with current parameters"""
-        self.bkt_engine = BKTEngine(
-            p_init=self.p_init,
-            p_transit=self.p_transit,
-            p_slip=self.p_slip,
-            p_guess=self.p_guess,
-            p_lapse=self.p_lapse
-        )
+    def _init_engine(self):
+        """Initialize the appropriate knowledge tracing engine"""
+        if self.use_ibkt:
+            self.engine = IBKTEngine(
+                p_init=self.p_init,
+                p_transit=self.p_transit,
+                p_slip=self.p_slip,
+                p_guess=self.p_guess,
+                p_lapse=self.p_lapse,
+                param_history=self.parameter_history or None,
+                response_count=self.response_count
+            )
+        else:
+            self.engine = BKTEngine(
+                p_init=self.p_init,
+                p_transit=self.p_transit,
+                p_slip=self.p_slip,
+                p_guess=self.p_guess,
+                p_lapse=self.p_lapse
+            )
+            
         # Set the consecutive correct counter to match the stored value
-        self.bkt_engine.consecutive_correct = self.consecutive_correct
+        self.engine.consecutive_correct = self.consecutive_correct
 
-    def update_knowledge_state(self, is_correct: bool) -> None:
-        """Update the knowledge state using BKT."""
+    def update_knowledge_state(self, is_correct: bool, question_id=None) -> None:
+        """
+        Update the knowledge state using either BKT or IBKT.
+        
+        Args:
+            is_correct (bool): Whether the answer was correct
+            question_id: The ID of the question being answered (required for IBKT)
+        """
+        # Make sure the engine is initialized
+        if not hasattr(self, 'engine'):
+            self._init_engine()
+            
+        # If using IBKT, track the response
+        if self.use_ibkt and question_id is not None:
+            self.engine.add_response(question_id, is_correct)
+            
+            # Update parameters from the engine
+            self.p_transit = self.engine.p_transit
+            self.p_slip = self.engine.p_slip
+            self.p_guess = self.engine.p_guess
+            self.parameter_history = self.engine.param_history
+            self.response_count = self.engine.response_count
+            self.last_update = datetime.now()
+        
         # First predict the new state
-        predicted_knowledge = self.bkt_engine.predict(self.current_knowledge)
+        predicted_knowledge = self.engine.predict(self.current_knowledge)
         # Then update based on the actual performance
-        self.current_knowledge = self.bkt_engine.update(predicted_knowledge, is_correct)
+        self.current_knowledge = self.engine.update(predicted_knowledge, is_correct)
         # Save the consecutive correct counter
-        self.consecutive_correct = self.bkt_engine.consecutive_correct
-        # Reinitialize BKT engine with updated parameters
-        self._init_bkt_engine()
+        self.consecutive_correct = self.engine.consecutive_correct
 
     def is_mastered(self, threshold: float = 0.985) -> bool:
         """Check if the user has mastered this category using a very high threshold."""
-        if not hasattr(self, 'bkt_engine'):
-            self._init_bkt_engine()
-        return self.bkt_engine.is_mastered(self.current_knowledge, threshold)
+        if not hasattr(self, 'engine'):
+            self._init_engine()
+        return self.engine.is_mastered(self.current_knowledge, threshold)
+        
+    def get_parameter_history(self):
+        """Get the history of parameter changes for analytics."""
+        if self.use_ibkt and hasattr(self, 'engine'):
+            return self.engine.get_parameter_history()
+        return None
 
     def __repr__(self):
         return f"<UserCategory(user_id={self.user_id}, category_id={self.category_id}, knowledge={self.current_knowledge:.2f})>"
@@ -207,7 +255,7 @@ class UserCategory(Base):
 # Add event listener to initialize BKT engine when UserCategory is loaded
 @event.listens_for(UserCategory, 'load')
 def init_bkt_engine(target, context):
-    target._init_bkt_engine()
+    target._init_engine()
 
 # ATTEMPT LOG (User interactions)
 class AttemptLog(Base):

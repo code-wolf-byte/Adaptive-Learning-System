@@ -368,7 +368,7 @@ def submit_answer(category_uuid):
         
         # Update knowledge state using BKT
         logger.debug(f"Current knowledge state before update: {user_category.current_knowledge}")
-        user_category.update_knowledge_state(option.is_correct)
+        user_category.update_knowledge_state(option.is_correct, question_id=question.id)
         logger.debug(f"New knowledge state after update: {user_category.current_knowledge}")
         
         # Commit all changes
@@ -411,6 +411,50 @@ def get_learning_history(category_uuid):
     } for attempt in attempts]
     
     return jsonify(history)
+
+@user_bp.route('/category/<uuid:category_uuid>/parameters')
+@login_required
+def get_parameter_history(category_uuid):
+    """Get the history of BKT parameters for the specified category."""
+    user = get_current_user()
+    
+    # Convert uuid parameter to string for database lookup
+    category_uuid_str = str(category_uuid)
+    
+    # Get the category first
+    category = g.db_session.query(Category).filter_by(uuid=category_uuid_str).first()
+    if not category:
+        return jsonify({'error': 'Category not found'}), 404
+    
+    # Get the user's category state
+    user_category = g.db_session.query(UserCategory).filter_by(
+        user_id=user.id,
+        category_id=category.id
+    ).first()
+    
+    if not user_category:
+        return jsonify({'error': 'No learning history for this category'}), 404
+    
+    # Get parameter history
+    param_history = user_category.get_parameter_history()
+    
+    if not param_history:
+        # If no IBKT or no history, return current parameters
+        param_history = {
+            'current': {
+                'p_transit': user_category.p_transit,
+                'p_slip': user_category.p_slip,
+                'p_guess': user_category.p_guess,
+                'knowledge': user_category.current_knowledge
+            },
+            'using_ibkt': user_category.use_ibkt
+        }
+    else:
+        # Add current knowledge state
+        param_history['current_knowledge'] = user_category.current_knowledge
+        param_history['using_ibkt'] = user_category.use_ibkt
+    
+    return jsonify(param_history)
 
 @user_bp.route('/section/<uuid:section_uuid>/categories')
 @login_required
