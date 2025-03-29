@@ -3,11 +3,12 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from database.models import User, Category, UserCategory, Question, Option, AttemptLog, Progress, Section
 from shared import db
 from functools import wraps
-from typing import Optional
+from typing import Optional, Dict, Any
 from . import user_bp
 from sqlalchemy.sql import func
 from sqlalchemy.orm import joinedload
 import logging
+from .markdown_utils import render_markdown_with_highlighting
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -76,6 +77,98 @@ def logout():
     flash('You have been logged out.', 'info')
     return redirect(url_for('user.login'))
 
+def calculate_user_progress(user_id):
+    """
+    Calculate user progress across all sections and categories
+    Returns a dict with progress data
+    """
+    user = g.db_session.query(User).get(user_id)
+    if not user:
+        return None
+    
+    # Get all categories
+    all_categories = g.db_session.query(Category).all()
+    
+    # Get categories from user's sections
+    section_categories = set()
+    user_sections = user.sections
+    
+    for section in user_sections:
+        for category in section.categories:
+            section_categories.add(category)
+    
+    # All categories the user has access to
+    categories = list(set(all_categories).union(section_categories))
+    
+    # Get user's learning state for each category
+    user_categories = {
+        uc.category_id: uc for uc in g.db_session.query(UserCategory).filter_by(user_id=user.id).all()
+    }
+    
+    # Calculate overall progress
+    total_categories = len(categories)
+    attempted_categories = 0
+    mastered_categories = 0
+    total_knowledge = 0
+    
+    for category in categories:
+        if category.id in user_categories and user_categories[category.id].current_knowledge > 0:
+            attempted_categories += 1
+            total_knowledge += user_categories[category.id].current_knowledge
+            if user_categories[category.id].is_mastered():
+                mastered_categories += 1
+    
+    overall_progress = 0
+    if attempted_categories > 0:
+        overall_progress = (total_knowledge / attempted_categories) * 100
+    
+    # Calculate section progress
+    section_progress = []
+    for section in user_sections:
+        section_data = {
+            'uuid': section.uuid,
+            'name': section.name,
+            'description': section.description,
+            'total_categories': len(section.categories),
+            'attempted_categories': 0,
+            'progress': 0,
+            'mastered': 0
+        }
+        
+        section_knowledge = 0
+        for category in section.categories:
+            if category.id in user_categories:
+                if user_categories[category.id].current_knowledge > 0:
+                    section_data['attempted_categories'] += 1
+                    section_knowledge += user_categories[category.id].current_knowledge
+                if user_categories[category.id].is_mastered():
+                    section_data['mastered'] += 1
+        
+        if section_data['attempted_categories'] > 0:
+            section_data['progress'] = (section_knowledge / section_data['attempted_categories']) * 100
+        
+        section_progress.append(section_data)
+    
+    return {
+        'total_categories': total_categories,
+        'attempted_categories': attempted_categories,
+        'mastered_categories': mastered_categories,
+        'overall_progress': overall_progress,
+        'section_progress': section_progress
+    }
+
+@user_bp.route('/api/user/progress')
+@login_required
+def get_user_progress():
+    """API endpoint to get user progress data"""
+    user_id = session.get('user_id')
+    progress_data = calculate_user_progress(user_id)
+    
+    if not progress_data:
+        return jsonify({'error': 'User not found'}), 404
+    
+    return jsonify(progress_data)
+
 # Dashboard and Category routes
 @user_bp.route('/dashboard')
 @login_required
@@ -108,11 +201,15 @@ def dashboard():
     # Get the user's sections
     sections = user.sections
     
+    # Get progress data
+    progress_data = calculate_user_progress(user.id)
+    
     return render_template('user/dashboard.html',
                          user=user,
                          categories=categories,
                          user_categories=user_categories,
-                         sections=sections)
+                         sections=sections,
+                         progress=progress_data)
 
 @user_bp.route('/category/<uuid:category_uuid>')
 @login_required
@@ -145,7 +242,9 @@ def category_detail(category_uuid):
         logger.debug(f"Creating new UserCategory for user {user.id} and category {category.id}")
         user_category = UserCategory(
             user_id=user.id,
-            category_id=category.id
+            category_id=category.id,
+            current_knowledge=0.0,
+            p_init=0.0
         )
         g.db_session.add(user_category)
         g.db_session.commit()  # Commit the new user_category
@@ -194,14 +293,23 @@ def get_next_question(category_uuid):
     logger.debug(f"Question text: {question.text}")
     logger.debug(f"Number of options: {len(question.options)}")
     
+    # Pre-render markdown content on the server
+    rendered_text = render_markdown_with_highlighting(question.text)
+    
     # Format the question for the frontend
-    options = [{'uuid': opt.uuid, 'text': opt.text} for opt in question.options]
+    options = [{
+        'uuid': opt.uuid,
+        'text': opt.text,
+        'rendered_text': render_markdown_with_highlighting(opt.text)
+    } for opt in question.options]
+    
     response_data = {
         'question_uuid': question.uuid,
-        'text': question.text,
+        'text': question.text,  # Keep the original text for reference
+        'rendered_text': rendered_text,  # Add the server-rendered HTML
         'options': options
     }
-    logger.debug(f"Sending response: {response_data}")
+    logger.debug(f"Sending response with rendered markdown")
     
     return jsonify(response_data)
 
@@ -252,7 +360,9 @@ def submit_answer(category_uuid):
         if not user_category:
             user_category = UserCategory(
                 user_id=user.id,
-                category_id=category.id
+                category_id=category.id,
+                current_knowledge=0.0,
+                p_init=0.0
             )
             g.db_session.add(user_category)
         
@@ -296,6 +406,7 @@ def get_learning_history(category_uuid):
     history = [{
         'date': attempt.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
         'question': attempt.question.text,
+        'rendered_question': render_markdown_with_highlighting(attempt.question.text),
         'result': 'Correct' if attempt.is_correct else 'Incorrect'
     } for attempt in attempts]
     
@@ -317,7 +428,18 @@ def section_categories(section_uuid):
         uc.category_id: uc for uc in g.db_session.query(UserCategory).filter_by(user_id=user.id).all()
     }
     
+    # Get progress data
+    progress_data = calculate_user_progress(user.id)
+    
+    # Find the section-specific progress from the overall progress data
+    section_progress = None
+    for section_data in progress_data['section_progress']:
+        if section_data['uuid'] == str(section_uuid):
+            section_progress = section_data
+            break
+    
     return render_template('user/section_categories.html',
                          user=user,
                          section=section,
-                         user_categories=user_categories) 
+                         user_categories=user_categories,
+                         section_progress=section_progress) 

@@ -132,7 +132,9 @@ class User(Base):
         if not user_category:
             user_category = UserCategory(
                 user_id=self.id,
-                category_id=category_id
+                category_id=category_id,
+                current_knowledge=0.0,
+                p_init=0.0
             )
             session.add(user_category)
             session.commit()
@@ -154,8 +156,8 @@ class UserCategory(Base):
     category_id = Column(Integer, ForeignKey("categories.id"), nullable=False)
     
     # BKT parameters with updated defaults for significantly slower learning
-    current_knowledge = Column(Float, default=0.15)  # Initial knowledge matches p_init
-    p_init = Column(Float, default=0.15)  # Lower initial knowledge
+    current_knowledge = Column(Float, default=0.0)  # Initial knowledge is now 0
+    p_init = Column(Float, default=0.0)  # Initial knowledge prior is now 0
     p_transit = Column(Float, default=0.15)  # Much slower learning rate
     p_slip = Column(Float, default=0.15)  # Higher chance of slipping
     p_guess = Column(Float, default=0.08)  # Lower chance of guessing

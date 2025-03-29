@@ -114,7 +114,9 @@ function renderMarkdown(text) {
         return text;
     }
     try {
-        return window.md.render(text || "");
+        // Ensure code blocks are properly rendered with pre and code tags
+        const rendered = window.md.render(text || "");
+        return rendered;
     } catch (error) {
         console.error("Error rendering markdown:", error);
         return text;
@@ -125,8 +127,12 @@ function renderMarkdown(text) {
 function applySyntaxHighlighting() {
     if (typeof hljs !== 'undefined') {
         document.querySelectorAll('pre code').forEach((block) => {
-            hljs.highlightElement(block);
+            if (!block.classList.contains('hljs')) {
+                hljs.highlightElement(block);
+            }
         });
+    } else {
+        console.warn("Highlight.js not available for syntax highlighting");
     }
 }
 
@@ -152,8 +158,29 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }, 2000);
     }
+    
+    // Add MutationObserver to watch for dynamically added content
+    const observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.addedNodes && mutation.addedNodes.length > 0) {
+                // Check if any added nodes contain markdown content
+                mutation.addedNodes.forEach(function(node) {
+                    if (node.classList && node.classList.contains('markdown-content')) {
+                        applySyntaxHighlighting();
+                    }
+                });
+            }
+        });
+    });
+    
+    // Start observing the document for changes
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true
+    });
 });
 
+// Function to load the next question
 function loadQuestion() {
     console.log('Loading question for category:', '{{ category.uuid }}');  // Debug log
     fetch(`/user/category/{{ category.uuid }}/next-question`)
@@ -201,19 +228,19 @@ function loadQuestion() {
                 </div>
             `;
             
-            // Render markdown for question text
-            document.getElementById('question-text').innerHTML = renderMarkdown(data.text);
+            // Use the pre-rendered HTML directly from the server
+            document.getElementById('question-text').innerHTML = data.rendered_text || renderMarkdown(data.text);
             
-            // Render markdown for each option
+            // Use pre-rendered HTML for each option or render it client-side if needed
             data.options.forEach(opt => {
                 const optionElement = document.getElementById(`option-text-${opt.uuid}`);
                 if (optionElement) {
-                    optionElement.innerHTML = renderMarkdown(opt.text);
+                    optionElement.innerHTML = opt.rendered_text || renderMarkdown(opt.text);
                 }
             });
             
-            // Apply syntax highlighting to question and options
-            applySyntaxHighlighting();
+            // Apply syntax highlighting to any elements that were not pre-rendered
+            setTimeout(() => applySyntaxHighlighting(), 0);
             
             // Add event listeners to radio buttons
             document.querySelectorAll('input[name="options"]').forEach(radio => {
@@ -343,7 +370,8 @@ function loadHistory() {
             }
             
             const historyRows = data.map(item => {
-                const renderedQuestion = renderMarkdown(item.question);
+                // Use the pre-rendered question from the server
+                const renderedQuestion = item.rendered_question || renderMarkdown(item.question);
                 return `
                     <tr>
                         <td>${item.date}</td>
@@ -359,8 +387,8 @@ function loadHistory() {
             
             document.getElementById('history-body').innerHTML = historyRows;
             
-            // Apply syntax highlighting to code blocks in history
-            applySyntaxHighlighting();
+            // Apply syntax highlighting to code blocks in history that might not be pre-rendered
+            setTimeout(() => applySyntaxHighlighting(), 0);
         })
         .catch(error => {
             console.error('Error loading history:', error);

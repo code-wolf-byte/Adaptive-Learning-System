@@ -5,7 +5,9 @@ google-generativeai==0.3.2
 greenlet==3.1.1
 itsdangerous==2.2.0
 Jinja2==3.1.6
+markdown2==2.5.3
 MarkupSafe==3.0.2
+pygments==2.19.1
 SQLAlchemy==2.0.39
 typing_extensions==4.12.2
 uuid==1.30

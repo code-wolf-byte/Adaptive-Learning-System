@@ -10,6 +10,50 @@
     </div>
 </div>
 
+<!-- Overall Progress Summary -->
+<div class="row mb-4">
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <h4 class="mb-0">Learning Progress Summary</h4>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-4">
+                        <div class="card mb-0 border-0">
+                            <div class="card-body text-center">
+                                <h6 class="text-muted">Overall Progress</h6>
+                                <div class="display-4">{{ progress.overall_progress|round }}%</div>
+                                <div class="progress mt-2">
+                                    <div class="progress-bar bg-primary" style="width: {{ progress.overall_progress|round }}%"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card mb-0 border-0">
+                            <div class="card-body text-center">
+                                <h6 class="text-muted">Mastered Categories</h6>
+                                <div class="display-4">{{ progress.mastered_categories }}</div>
+                                <div class="text-muted">Out of {{ progress.total_categories }}</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card mb-0 border-0">
+                            <div class="card-body text-center">
+                                <h6 class="text-muted">Categories Attempted</h6>
+                                <div class="display-4">{{ progress.attempted_categories }}</div>
+                                <div class="text-muted">Out of {{ progress.total_categories }}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Sections the user belongs to -->
 {% if sections %}
 <div class="row">
@@ -20,37 +64,31 @@
             </div>
             <div class="card-body">
                 <div class="row">
-                    {% for section in sections %}
+                    {% for section_data in progress.section_progress %}
                     <div class="col-md-4 mb-3">
                         <div class="card h-100">
                             <div class="card-body">
-                                <h5 class="card-title">{{ section.name }}</h5>
-                                {% if section.description %}
-                                <p class="card-text">{{ section.description }}</p>
+                                <h5 class="card-title">{{ section_data.name }}</h5>
+                                {% if section_data.description %}
+                                <p class="card-text">{{ section_data.description }}</p>
                                 {% endif %}
-                                {% set section_progress = 0 %}
-                                {% set total_categories = section.categories|length %}
-                                {% if total_categories > 0 %}
-                                    {% for category in section.categories %}
-                                        {% if category.id in user_categories %}
-                                            {% set section_progress = section_progress + user_categories[category.id].current_knowledge %}
-                                        {% endif %}
-                                    {% endfor %}
-                                    {% set section_progress = (section_progress / total_categories) * 100 %}
-                                {% endif %}
+                                
                                 <div class="progress mb-2">
-                                    <div class="progress-bar {% if section_progress >= 95 %}bg-success{% else %}bg-primary{% endif %}"
+                                    <div class="progress-bar {% if section_data.progress >= 95 %}bg-success{% else %}bg-primary{% endif %}"
                                          role="progressbar"
-                                         style="width: {{ section_progress|round }}%"
-                                         aria-valuenow="{{ section_progress|round }}"
+                                         style="width: {{ section_data.progress|round }}%"
+                                         aria-valuenow="{{ section_data.progress|round }}"
                                          aria-valuemin="0"
                                          aria-valuemax="100">
-                                        {{ section_progress|round }}%
+                                        {{ section_data.progress|round }}%
                                     </div>
                                 </div>
                                 <div class="d-flex justify-content-between align-items-center">
-                                    <span class="badge bg-primary">{{ total_categories }} Categories</span>
-                                    <a href="{{ url_for('user.section_categories', section_uuid=section.uuid) }}" class="btn btn-outline-primary">
+                                    <div>
+                                        <span class="badge bg-primary">{{ section_data.total_categories }} Categories</span>
+                                        <span class="badge bg-info ms-1">{{ section_data.attempted_categories }} Attempted</span>
+                                    </div>
+                                    <a href="{{ url_for('user.section_categories', section_uuid=section_data.uuid) }}" class="btn btn-outline-primary">
                                         View Categories
                                     </a>
                                 </div>
@@ -72,4 +110,12 @@
     </div>
 </div>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('Dashboard loaded');
+});
+</script>
 {% endblock %} 
